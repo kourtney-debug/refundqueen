@@ -1,11 +1,45 @@
 <!DOCTYPE html>
 <html>
-<head><title>Refund Result</title></head>
-<body style="text-align:center;padding:50px;">
-  <h1>{{ message }}</h1>
-  {% for r in refunds %}
-    <p style="font-size:20px;">{{ r }}</p>
-  {% endfor %}
-  <br><a href="/">Scan Another</a>
+<head>
+  <title>Your Refund</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 50px;
+      background: #e8f5e9;
+    }
+    h1 {
+      font-size: 40px;
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-size: 28px;
+      margin-top: 10px;
+    }
+    p {
+      font-size: 20px;
+    }
+    a {
+      font-size: 20px;
+      color: #4a148c;
+    }
+  </style>
+</head>
+<body>
+  <h1>REFUND FOUND: ${{ "%.2f"|format(total) }}</h1>
+
+  {% if total > 0 %}
+    <h2>You are owed money!</h2>
+    {% for r in refunds %}
+      <p>{{ r }}</p>
+    {% endfor %}
+  {% else %}
+    <h2>No refunds found this time</h2>
+  {% endif %}
+
+  <br>
+  <a href="/">Scan Another Receipt</a>
 </body>
 </html>
