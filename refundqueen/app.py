@@ -2,20 +2,59 @@ from flask import Flask, render_template, request, flash
 import cv2
 import numpy as np
 from PIL import Image
-import pytesseract
-pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 import os
-import traceback  # NEW: for logging errors
+import traceback
+import io
 
 app = Flask(__name__)
 app.secret_key = "refundqueen2025"
 
+# Read OCR API key from environment (set in Railway)
+OCR_API_KEY = os.environ.get("OCR_API_KEY")
+
+
+def ocr_image_with_api(pil_image):
+    """
+    Takes a PIL image, sends it to OCR.space, and returns extracted text.
+    """
+    if not OCR_API_KEY:
+        raise RuntimeError("OCR_API_KEY is not set")
+
+    # Convert image (PIL) to bytes
+    buf = io.BytesIO()
+    pil_image.save(buf, format="JPEG")
+    buf.seek(0)
+
+    files = {"file": ("receipt.jpg", buf, "image/jpeg")}
+    data = {
+        "apikey": OCR_API_KEY,
+        "language": "eng",
+        "OCREngine": 2,
+    }
+
+    r = requests.post(
+        "https://api.ocr.space/parse/image",
+        files=files,
+        data=data,
+        timeout=60,
+    )
+    r.raise_for_status()
+    result = r.json()
+
+    if not result.get("ParsedResults"):
+        return ""
+
+    return result["ParsedResults"][0].get("ParsedText", "")
+
 
 def preprocess(file):
+    """
+    Basic denoising/sharpening so the OCR API gets a clearer image.
+    """
     nparr = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     img = cv2.resize(img, None, fx=1.5, fy=1.5)
@@ -42,16 +81,17 @@ def index():
         if "file" not in request.files:
             flash("No file uploaded")
             return render_template("index.html")
+
         file = request.files["file"]
         if file.filename == "":
             flash("No file selected")
             return render_template("index.html")
 
         try:
-            # --- OCR ---
+            # --- OCR via API ---
             file.seek(0)
             img = preprocess(file)
-            text = pytesseract.image_to_string(img)
+            text = ocr_image_with_api(img)
 
             # --- Parse items + prices from receipt text ---
             items = []
@@ -59,12 +99,15 @@ def index():
                 match = re.search(r"(.+?)\s+[\$]?([\d.,]+)$", line)
                 if match:
                     name = match.group(1).strip()
-                    price = float(match.group(2).replace(",", ""))
+                    try:
+                        price = float(match.group(2).replace(",", ""))
+                    except ValueError:
+                        continue
                     items.append({"name": name, "paid": price})
 
             # --- Check Amazon for cheaper prices ---
             refunds = []
-            total = 0
+            total = 0.0
             for item in items:
                 try:
                     url = f"https://www.amazon.com/s?k={quote(item['name'][:60])}"
@@ -77,9 +120,13 @@ def index():
                     prices = []
                     for p in soup.select(".a-price-whole"):
                         whole = p.get_text(strip=True)
-                        frac = p.find_next_sibling(".a-price-fraction")
-                        frac = frac.get_text(strip=True) if frac else "00"
-                        prices.append(float(whole + "." + frac))
+                        frac_el = p.find_next_sibling(".a-price-fraction")
+                        frac = frac_el.get_text(strip=True) if frac_el else "00"
+                        try:
+                            prices.append(float(whole + "." + frac))
+                        except ValueError:
+                            continue
+
                     if prices:
                         amazon = min(prices)
                         if item["paid"] > amazon + 0.01:
@@ -88,8 +135,8 @@ def index():
                             refunds.append(
                                 f"• {item['name'][:60]} → ${item['paid']:.2f} → ${amazon:.2f} (Save ${save:.2f})"
                             )
+
                 except Exception as inner_e:
-                    # log but keep going on other items
                     print("Inner item error:", inner_e, flush=True)
                     traceback.print_exc()
                     continue
@@ -97,7 +144,6 @@ def index():
             return render_template("result.html", refunds=refunds, total=total)
 
         except Exception as e:
-            # TOP-LEVEL ERROR LOGGING
             print("TOP-LEVEL ERROR:", e, flush=True)
             traceback.print_exc()
             flash("Error processing receipt")
