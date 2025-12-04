@@ -1,7 +1,4 @@
 from flask import Flask, render_template, request, flash
-import cv2
-import numpy as np
-from PIL import Image
 import re
 import requests
 from bs4 import BeautifulSoup
@@ -17,19 +14,20 @@ app.secret_key = "refundqueen2025"
 OCR_API_KEY = os.environ.get("OCR_API_KEY")
 
 
-def ocr_image_with_api(pil_image):
+def ocr_image_with_api(file_storage):
     """
-    Takes a PIL image, sends it to OCR.space, and returns extracted text.
+    Takes the uploaded file, sends it to OCR.space, and returns extracted text.
+    We skip OpenCV/PIL preprocessing to avoid image decoding issues on server.
     """
     if not OCR_API_KEY:
         raise RuntimeError("OCR_API_KEY is not set")
 
-    # Convert image (PIL) to bytes
-    buf = io.BytesIO()
-    pil_image.save(buf, format="JPEG")
-    buf.seek(0)
+    # Ensure we're at the start of the file
+    file_storage.seek(0)
+    file_bytes = file_storage.read()
 
-    files = {"file": ("receipt.jpg", buf, "image/jpeg")}
+    # OCR.space expects a file-like payload
+    files = {"file": ("receipt.jpg", file_bytes, file_storage.mimetype or "image/jpeg")}
     data = {
         "apikey": OCR_API_KEY,
         "language": "eng",
@@ -37,7 +35,7 @@ def ocr_image_with_api(pil_image):
     }
 
     try:
-        # NOTE: using http (not https) to avoid SSL issues in this environment
+        # Using http to avoid SSL issues in this environment
         r = requests.post(
             "http://api.ocr.space/parse/image",
             files=files,
@@ -57,30 +55,6 @@ def ocr_image_with_api(pil_image):
     return result["ParsedResults"][0].get("ParsedText", "")
 
 
-def preprocess(file):
-    """
-    Basic denoising/sharpening so the OCR API gets a clearer image.
-    """
-    nparr = np.frombuffer(file.read(), np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    img = cv2.resize(img, None, fx=1.5, fy=1.5)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    thresh = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        11,
-        2,
-    )
-    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-    sharpened = cv2.filter2D(thresh, -1, kernel)
-    return Image.fromarray(sharpened)
-
-
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -94,10 +68,8 @@ def index():
             return render_template("index.html")
 
         try:
-            # --- OCR via API ---
-            file.seek(0)
-            img = preprocess(file)
-            text = ocr_image_with_api(img)
+            # --- OCR via API (no OpenCV preprocessing) ---
+            text = ocr_image_with_api(file)
 
             # --- Parse items + prices from receipt text ---
             items = []
@@ -153,6 +125,7 @@ def index():
             print("TOP-LEVEL ERROR:", e, flush=True)
             traceback.print_exc()
             flash("Error processing receipt")
+            # Fall through to re-render index
 
     return render_template("index.html")
 
