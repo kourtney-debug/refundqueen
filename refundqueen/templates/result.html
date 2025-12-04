@@ -7,30 +7,65 @@
     body {
       font-family: Arial, sans-serif;
       text-align: center;
-      padding: 40px 20px;
+      padding: 40px 10px;
       background: #e8f5e9;
       color: #333;
     }
     h1 {
-      font-size: 40px;
-      margin-bottom: 10px;
+      font-size: 36px;
+      margin-bottom: 5px;
       color: #2e7d32;
     }
     h2 {
-      font-size: 24px;
-      margin-top: 10px;
-      margin-bottom: 25px;
+      font-size: 22px;
+      margin-top: 5px;
+      margin-bottom: 20px;
       color: #555;
     }
-    p {
-      font-size: 18px;
-      margin: 6px 0;
+    .summary {
+      margin-bottom: 20px;
     }
-    .refund-line {
-      font-size: 18px;
-      margin: 4px 0;
+    table {
+      margin: 0 auto;
+      border-collapse: collapse;
+      width: 95%;
+      max-width: 900px;
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+    }
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #eee;
+      font-size: 14px;
+    }
+    th {
+      background: #f1f8e9;
+      font-weight: bold;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    td.amount {
+      text-align: right;
+      white-space: nowrap;
+    }
+    .diff-positive {
+      color: #2e7d32;
+      font-weight: bold;
+    }
+    .diff-zero {
+      color: #999;
+    }
+    .footer {
+      margin-top: 20px;
+      font-size: 14px;
+      color: #555;
     }
     a {
+      display: inline-block;
+      margin-top: 15px;
       font-size: 18px;
       color: #4a148c;
       text-decoration: none;
@@ -38,49 +73,57 @@
     a:hover {
       text-decoration: underline;
     }
-    .summary-card {
-      max-width: 500px;
-      margin: 20px auto;
-      background: white;
-      border-radius: 16px;
-      padding: 20px 20px 24px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-    }
-    .checked-list {
-      margin-top: 20px;
-      font-size: 16px;
-      color: #555;
-      text-align: left;
-      display: inline-block;
-    }
-    .checked-list li {
-      margin: 4px 0;
-    }
   </style>
 </head>
 <body>
-  <div class="summary-card">
+  <div class="summary">
     <h1>REFUND FOUND: ${{ "%.2f"|format(total) }}</h1>
-
-    {% if total > 0 %}
-      <h2>You’re owed money on this receipt.</h2>
-      {% for r in refunds %}
-        <p class="refund-line">{{ r }}</p>
-      {% endfor %}
+    {% if order_date %}
+      <h2>Receipt date: {{ order_date }}</h2>
     {% else %}
-      <h2>No refund opportunities found this time.</h2>
-      <p>We didn’t see any price drops or clear fee errors on this receipt.</p>
+      <h2>Receipt analyzed</h2>
     {% endif %}
-
-    <ul class="checked-list">
-      <li>✓ Receipt scanned and line items extracted</li>
-      <li>✓ Prices compared against current Amazon listings</li>
-      <li>✓ Checked for obvious tariff & fee inconsistencies</li>
-      <li>✓ Evaluated refund eligibility based on price differences</li>
-    </ul>
   </div>
 
-  <br>
+  {% if analysis and analysis|length > 0 %}
+    <table>
+      <tr>
+        <th style="text-align:left;">Item</th>
+        <th>Date</th>
+        <th class="amount">You paid</th>
+        <th class="amount">Current price</th>
+        <th class="amount">Difference</th>
+      </tr>
+      {% for row in analysis %}
+        <tr>
+          <td style="text-align:left;">{{ row.name }}</td>
+          <td>{{ order_date or "-" }}</td>
+          <td class="amount">${{ "%.2f"|format(row.paid) }}</td>
+          <td class="amount">
+            {% if row.current is not none %}
+              ${{ "%.2f"|format(row.current) }}
+            {% else %}
+              <span class="diff-zero">n/a</span>
+            {% endif %}
+          </td>
+          <td class="amount">
+            {% if row.diff > 0 %}
+              <span class="diff-positive">+${{ "%.2f"|format(row.diff) }}</span>
+            {% else %}
+              <span class="diff-zero">$0.00</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <h2>No items could be extracted from this receipt.</h2>
+  {% endif %}
+
+  <div class="footer">
+    <p>We scanned your receipt, compared prices against Amazon, and checked for obvious fee/tariff issues.</p>
+  </div>
+
   <a href="/">Scan Another Receipt</a>
 </body>
 </html>
