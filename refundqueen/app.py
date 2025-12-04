@@ -1,185 +1,110 @@
 from flask import Flask, render_template, request, flash
+import cv2
+import numpy as np
+from PIL import Image
+import pytesseract
 import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 import os
-import traceback
-import io
 
 app = Flask(__name__)
 app.secret_key = "refundqueen2025"
 
-# Read OCR API key from environment (set in Railway)
-OCR_API_KEY = os.environ.get("OCR_API_KEY")
-
-
-def ocr_image_with_api(file_storage):
-    """
-    Takes the uploaded file, sends it to OCR.space, and returns extracted text.
-    """
-    if not OCR_API_KEY:
-        raise RuntimeError("OCR_API_KEY is not set")
-
-    # Ensure we're at the start of the file
-    file_storage.seek(0)
-    file_bytes = file_storage.read()
-
-    files = {"file": ("receipt.jpg", file_bytes, file_storage.mimetype or "image/jpeg")}
-    data = {
-        "apikey": OCR_API_KEY,
-        "language": "eng",
-        "OCREngine": 2,
-    }
-
-    try:
-        # Using http to avoid SSL issues in this environment
-        r = requests.post(
-            "http://api.ocr.space/parse/image",
-            files=files,
-            data=data,
-            timeout=60,
-        )
-        r.raise_for_status()
-        result = r.json()
-    except Exception as e:
-        print("OCR API error:", e, flush=True)
-        traceback.print_exc()
-        return ""
-
-    if not result.get("ParsedResults"):
-        return ""
-
-    return result["ParsedResults"][0].get("ParsedText", "")
-
+def preprocess(file_stream):
+    # Read the uploaded file
+    file_bytes = np.frombuffer(file_stream.read(), np.uint8)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+    # Nuclear preprocessing
+    img = cv2.resize(img, None, fx=1.5, fy=1.5)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    sharpened = cv2.filter2D(thresh, -1, kernel)
+    return Image.fromarray(sharpened)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
-        if "file" not in request.files:
-            flash("No file uploaded")
-            return render_template("index.html")
-
         file = request.files["file"]
-        if file.filename == "":
-            flash("No file selected")
+        file.seek(0)
+        img = preprocess(file)
+        if img is None:
+            flash("Could not read image")
             return render_template("index.html")
-
-        try:
-            # --- OCR via API ---
-            text = ocr_image_with_api(file)
-
-            # --- LOG THE RAW OCR TEXT ---
-            print("OCR TEXT START >>>", flush=True)
-            print(text, flush=True)
-            print("<<< OCR TEXT END", flush=True)
-
-            # --- Parse items + prices from receipt text ---
-            items = []
-            prev_line = None
-
-            for raw_line in text.split("\n"):
-                line = raw_line.strip()
-                if not line:
-                    continue
-
-                # Skip obvious non-item lines
-                if any(
-                    key in line.lower()
-                    for key in [
-                        "order summary",
-                        "subtotal",
-                        "total before tax",
-                        "grand total",
-                        "shipping",
-                        "handling",
-                        "payment method",
-                        "order placed",
-                        "tax",
-                    ]
-                ):
-                    continue
-
-                # Case 1: name and price on the same line
-                m_both = re.search(r"(.+?)\s+\$?([\d.,]+)$", line)
-                if m_both:
-                    name = m_both.group(1).strip()
-                    try:
-                        price = float(m_both.group(2).replace(",", ""))
-                    except ValueError:
-                        prev_line = line
-                        continue
-
-                    items.append({"name": name, "paid": price})
-                    prev_line = None
-                    continue
-
-                # Case 2: line is only a price, use previous line as name
-                m_price_only = re.match(r"^\$?([\d.,]+)$", line)
-                if m_price_only and prev_line:
-                    name = prev_line
-                    try:
-                        price = float(m_price_only.group(1).replace(",", ""))
-                    except ValueError:
-                        prev_line = line
-                        continue
-
-                    items.append({"name": name, "paid": price})
-                    prev_line = None
-                    continue
-
-                # Otherwise, remember this as possible name line
-                prev_line = line
-
-            print("PARSED ITEMS:", items, flush=True)
-
-            # --- Check Amazon for cheaper prices ---
-            refunds = []
-            total = 0.0
-            for item in items:
+        
+        # OCR
+        text = pytesseract.image_to_string(img)
+        print("OCR TEXT:", text)  # Debug log
+        
+        # Smart item extraction
+        items = []
+        lines = text.split('\n')
+        prev_line = ""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Look for price at the end
+            match = re.search(r'(.+?)\s+\$?([\d.,]+)$', line)
+            if match:
+                name = match.group(1).strip()
                 try:
-                    url = f"https://www.amazon.com/s?k={quote(item['name'][:60])}"
-                    r = requests.get(
-                        url,
-                        headers={"User-Agent": "Mozilla/5.0"},
-                        timeout=10,
-                    )
-                    soup = BeautifulSoup(r.text, "html.parser")
-                    prices = []
-                    for p in soup.select(".a-price-whole"):
-                        whole = p.get_text(strip=True)
-                        frac_el = p.find_next_sibling(".a-price-fraction")
-                        frac = frac_el.get_text(strip=True) if frac_el else "00"
-                        try:
-                            prices.append(float(whole + "." + frac))
-                        except ValueError:
-                            continue
-
-                    if prices:
-                        amazon = min(prices)
-                        if item["paid"] > amazon + 0.01:
-                            save = item["paid"] - amazon
-                            total += save
-                            refunds.append(
-                                f"• {item['name'][:60]} → ${item['paid']:.2f} → ${amazon:.2f} (Save ${save:.2f})"
-                            )
-
-                except Exception as inner_e:
-                    print("Inner item error:", inner_e, flush=True)
-                    traceback.print_exc()
-                    continue
-
-            return render_template("result.html", refunds=refunds, total=total)
-
-        except Exception as e:
-            print("TOP-LEVEL ERROR:", e, flush=True)
-            traceback.print_exc()
-            flash("Error processing receipt")
-
+                    price = float(match.group(2).replace(',', ''))
+                    items.append({"name": name, "paid": price})
+                except:
+                    pass
+                prev_line = ""
+            else:
+                prev_line = line  # might be name for next line's price
+        
+        # Find refunds
+        refunds = []
+        total = 0
+        for item in items:
+            try:
+                query = quote(item["name"][:60])
+                url = f"https://www.amazon.com/s?k={query}"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                r = requests.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(r.text, "html.parser")
+                
+                prices = []
+                for p in soup.select('.a-price-whole'):
+                    whole = p.get_text(strip=True)
+                    frac = p.find_next_sibling('.a-price-fraction')
+                    frac = frac.get_text(strip=True) if frac else "00"
+                    try:
+                        prices.append(float(whole + "." + frac))
+                    except:
+                        continue
+                
+                if prices:
+                    amazon_price = min(prices)
+                    if item["paid"] > amazon_price + 0.01:
+                        save = item["paid"] - amazon_price
+                        total += save
+                        refunds.append({
+                            "name": item["name"],
+                            "paid": item["paid"],
+                            "amazon": amazon_price,
+                            "save": save
+                        })
+            except Exception as e:
+                print("Price check error:", e)
+                continue
+        
+        return render_template("result.html", refunds=refunds, total=total, count=len(refunds))
+    
     return render_template("index.html")
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-    
