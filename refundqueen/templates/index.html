@@ -1,21 +1,216 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Refund Queen</title>
+  <title>Refund Queen – Turn Receipts into Refunds</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial; text-align: center; padding: 50px; background: #fff0f8; }
-    h1 { color: #d81b60; }
-    button { background: #d81b60; color: white; padding: 20px; font-size: 20px; border: none; }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 40px 20px;
+      background: #fff0f8;
+      color: #333;
+    }
+    h1 {
+      color: #d81b60;
+      font-size: 44px;
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-size: 22px;
+      margin-top: 0;
+      margin-bottom: 30px;
+      color: #555;
+    }
+    .brands {
+      margin: 20px 0 30px;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .brand-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid #ddd;
+      font-size: 16px;
+      font-weight: bold;
+      color: #444;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .brand-pill span.logo-dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .logo-amazon { background: #ff9900; }
+    .logo-walmart { background: #0071ce; }
+    .logo-target { background: #cc0000; }
+    .logo-costco { background: #005daa; }
+
+    .card {
+      max-width: 420px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      padding: 24px 20px 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    }
+    .card p {
+      font-size: 18px;
+      margin-bottom: 20px;
+    }
+    input[type="file"] {
+      margin: 15px 0 25px;
+      font-size: 16px;
+    }
+    button {
+      margin-top: 5px;
+      padding: 14px 28px;
+      font-size: 18px;
+      background: #d81b60;
+      color: white;
+      border: none;
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.1s ease;
+    }
+    button:hover {
+      background: #ad164c;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+    }
+    button:active {
+      background: #8f123e;
+      transform: translateY(1px);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    /* Progress overlay */
+    #progress-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(255,240,248,0.96);
+      z-index: 999;
+      padding: 40px 20px;
+      text-align: center;
+    }
+    #progress-overlay h2 {
+      font-size: 26px;
+      color: #d81b60;
+      margin-bottom: 25px;
+    }
+    .step {
+      font-size: 18px;
+      margin: 8px 0;
+      opacity: 0.25;
+      transition: opacity 0.4s ease;
+    }
+    .step.active {
+      opacity: 1;
+      font-weight: bold;
+    }
+    .step.done {
+      opacity: 0.7;
+      font-weight: normal;
+    }
   </style>
 </head>
 <body>
   <h1>REFUND QUEEN</h1>
-  <p>Drop your receipt → get money back</p>
-  <form method="post" enctype="multipart/form-data">
-    <input type="file" name="file" accept="image/*,.pdf" required>
-    <br><br>
-    <button type="submit">FIND MY REFUND</button>
-  </form>
+  <h2>Upload a receipt. We’ll hunt for hidden refunds.</h2>
+
+  <div class="brands">
+    <div class="brand-pill">
+      <span class="logo-dot logo-amazon"></span>Amazon
+    </div>
+    <div class="brand-pill">
+      <span class="logo-dot logo-walmart"></span>Walmart
+    </div>
+    <div class="brand-pill">
+      <span class="logo-dot logo-target"></span>Target
+    </div>
+    <div class="brand-pill">
+      <span class="logo-dot logo-costco"></span>Costco
+    </div>
+  </div>
+
+  <div class="card">
+    <p>Drop a screenshot or photo of your receipt. RefundQueen will:</p>
+    <p style="font-size:16px; color:#666; margin-top:-10px;">
+      • Scan line items<br>
+      • Check for price drops & fee errors<br>
+      • Calculate what you’re owed
+    </p>
+
+    <form id="receipt-form" method="post" enctype="multipart/form-data">
+      <input type="file" name="file" accept="image/*,.pdf" required>
+      <br>
+      <button type="submit">FIND MY REFUND</button>
+    </form>
+  </div>
+
+  <!-- Processing overlay -->
+  <div id="progress-overlay">
+    <h2>RefundQueen is working on your receipt…</h2>
+    <div id="steps">
+      <div class="step" id="step1">1. Scanning your receipt…</div>
+      <div class="step" id="step2">2. Extracting items & totals…</div>
+      <div class="step" id="step3">3. Checking Amazon and other prices…</div>
+      <div class="step" id="step4">4. Looking for tariff & fee errors…</div>
+      <div class="step" id="step5">5. Checking refund eligibility…</div>
+      <div class="step" id="step6">6. Preparing your savings summary…</div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('receipt-form');
+    const overlay = document.getElementById('progress-overlay');
+    const steps = [
+      document.getElementById('step1'),
+      document.getElementById('step2'),
+      document.getElementById('step3'),
+      document.getElementById('step4'),
+      document.getElementById('step5'),
+      document.getElementById('step6'),
+    ];
+
+    form.addEventListener('submit', function(e) {
+      // Show the pretty progress overlay and delay form submission a bit
+      e.preventDefault();
+
+      const fileInput = form.querySelector('input[type="file"]');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert("Please choose a receipt image or PDF first.");
+        return;
+      }
+
+      overlay.style.display = 'block';
+
+      let index = 0;
+      function advanceStep() {
+        if (index >= steps.length) {
+          // After steps animate, actually submit the form to the server
+          form.submit();
+          return;
+        }
+        steps[index].classList.add('active');
+        setTimeout(() => {
+          steps[index].classList.add('done');
+          index++;
+          advanceStep();
+        }, 900);
+      }
+      advanceStep();
+    });
+  </script>
 </body>
 </html>
