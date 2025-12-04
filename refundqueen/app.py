@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, flash, redirect, url_for
 import cv2
 import numpy as np
 from PIL import Image
@@ -7,18 +7,24 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+import stripe
 import os
 
 app = Flask(__name__)
+app.secret_key = "refundqueen2025"
+
+# Your 5% commission
+COMMISSION_RATE = 0.05  # 5%
+
+stripe.keys.secret_key = os.environ["STRIPE_SECRET_KEY"]
 
 def process_receipt(file_stream):
-    # Read the uploaded file
     file_bytes = np.frombuffer(file_stream.read(), np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if img is None:
-        return "Could not read image", []
+        return "Could not read image", [], 0
     
-    # Nuclear preprocessing
+    # Nuclear OCR + parsing (same as before)
     img = cv2.resize(img, None, fx=1.5, fy=1.5)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
@@ -26,29 +32,76 @@ def process_receipt(file_stream):
     gray = clahe.apply(gray)
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpened = cv2D(thresh, -1, kernel)
+    sharpened = cv2.filter2D(thresh, -1, kernel)
     pil_img = Image.fromarray(sharpened)
-    
-    # OCR
     text = pytesseract.image_to_string(pil_img)
-    
-    # Parse items
+
     items = []
     for line in text.split('\n'):
-        line = line.strip()
-        if not line: continue
-        match = re.search(r'(.+?)\s+\$?([\d.,]+)$', line)
-        if match:
-            name = match.group(1).strip()
-            try:
-                price = float(match.group(2).replace(',', ''))
-                items.append({"name": name, "paid": price})
-            except:
-                continue
-    
-    # Check Amazon prices
+        m = re.search(r'(.+?)\s+\$?([\d.,]+)$', line.strip())
+        if m:
+            name = m.group(1).strip()
+            price = float(m.group(2).replace(',', ''))
+            items.append({"name": name, "paid": price})
+
     refunds = []
-    total = 0
+    total_save = 0
     for item in items:
         try:
-            url = f"https://www.amazon.com/s?k={quote(item['name'][:60
+            url = f"https://www.amazon.com/s?k={quote(item['name'][:60])}"
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+            prices = []
+            for p in soup.select('.a-price-whole'):
+                whole = p.get_text(strip=True)
+                frac = p.find_next_sibling('.a-price-fraction')
+                frac = frac.get_text(strip=True) if frac else "00"
+                prices.append(float(whole + "." + frac))
+            if prices:
+                amazon = min(prices)
+                if item["paid"] > amazon + 0.01:
+                    save = item["paid"] - amazon
+                    total_save += save
+                    refunds.append(f"• {item['name'][:60]} — ${item['paid']:.2f} → ${amazon:.2f} (Save ${save:.2f})")
+        except:
+            continue
+
+    commission = total_save * COMMISSION_RATE
+    return total_save, commission, refunds
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        file = request.files["file"]
+        file.seek(0)
+        total_save, commission, refunds = process_receipt(file)
+        
+        if total_save == 0:
+            return render_template("result.html", total_save=0, commission=0, refunds=[])
+
+        # Create Stripe payment link for your 5%
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {'name': 'RefundQueen 5% Fee'},
+                    'unit_amount': int(commission * 100),
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url='https://refundqueen.me/success',
+            cancel_url='https://refundqueen.me',
+        )
+        return redirect(session.url, code=303)
+    
+    return render_template("index.html")
+
+@app.route("/success")
+def success():
+    return "<h1>Thank you! Your refund is being processed. You just made the Refund Queen $!</h1>"
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
