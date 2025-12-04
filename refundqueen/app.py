@@ -227,13 +227,29 @@ def index():
                         except ValueError:
                             continue
 
+                    # 🔍 LOG THE AMAZON PRICES WE FOUND
+                    print(
+                        f"AMAZON PRICES for {item['name'][:40]}: paid={item['paid']}, prices={prices}",
+                        flush=True,
+                    )
+
                     if prices:
                         amazon = min(prices)
+                        # Log the chosen best price and whether we consider it a refund
+                        print(
+                            f"BEST AMAZON PRICE for {item['name'][:40]}: {amazon} (paid {item['paid']})",
+                            flush=True,
+                        )
                         if item["paid"] > amazon + 0.01:
                             save = item["paid"] - amazon
                             total += save
                             refunds.append(
                                 f"• {item['name'][:60]} → ${item['paid']:.2f} → ${amazon:.2f} (Save ${save:.2f})"
+                            )
+                        else:
+                            print(
+                                f"No refund: paid {item['paid']} vs best {amazon}",
+                                flush=True,
                             )
 
                 except Exception as inner_e:
