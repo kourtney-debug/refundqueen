@@ -5,3 +5,4 @@ pytesseract
 requests
 beautifulsoup4
 gunicorn
+stripe
