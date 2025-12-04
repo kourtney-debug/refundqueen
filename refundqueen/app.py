@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import pytesseract
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
 import re
 import requests
 from bs4 import BeautifulSoup
