@@ -26,7 +26,6 @@ def ocr_image_with_api(file_storage):
     file_storage.seek(0)
     file_bytes = file_storage.read()
 
-    # OCR.space expects a file-like payload
     files = {"file": ("receipt.jpg", file_bytes, file_storage.mimetype or "image/jpeg")}
     data = {
         "apikey": OCR_API_KEY,
@@ -70,6 +69,11 @@ def index():
         try:
             # --- OCR via API (no OpenCV preprocessing) ---
             text = ocr_image_with_api(file)
+
+            # --- LOG THE RAW OCR TEXT ---
+            print("OCR TEXT START >>>", flush=True)
+            print(text, flush=True)
+            print("<<< OCR TEXT END", flush=True)
 
             # --- Parse items + prices from receipt text ---
             items = []
