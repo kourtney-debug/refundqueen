@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><title>Your Refund</title></head>
+<body style="font-family:Arial;text-align:center;padding:50px;background:#e8f5e9;">
+  <h1>REFUND FOUND: ${{ "%.2f"|format(total) }}</h1>
+  {% if total > 0 %}
+    <h2>You are owed money!</h2>
+    {% for r in refunds %}
+      <p style="font-size:20px;">{{ r }}</p>
+    {% endfor %}
+  {% else %}
+    <h2>No refunds found this time</h2>
+  {% endif %}
+  <br><a href="/">Scan Another Receipt</a>
+</body>
+</html>
