@@ -15,10 +15,13 @@ stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 
 COMMISSION_RATE = 0.05  # 5%
 
-def preprocess(file_stream):
-    file_bytes = np.frombuffer(file_stream.read(), np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    if img is None: return None
+def process_receipt(file):
+    file.seek(0)
+    nparr = np.frombuffer(file.read(), np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return "Could not read image", [], 0
+
     img = cv2.resize(img, None, fx=1.5, fy=1.5)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
@@ -27,23 +30,21 @@ def preprocess(file_stream):
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
     sharpened = cv2.filter2D(thresh, -1, kernel)
-    return Image.fromarray(sharpened)
+    pil_img = Image.fromarray(sharpened)
+    text = pytesseract.image_to_string(pil_img)
 
-def find_refunds(file):
-    file.seek(0)
-    img = preprocess(file)
-    if not img: return "Could not read image", [], 0
-    
-    text = pytesseract.image_to_string(img)
-    
     items = []
     for line in text.split('\n'):
-        m = re.search(r'(.+?)\s+\$?([\d.,]+)$', line.strip())
-        if m:
-            name = m.group(1).strip()
-            price = float(m.group(2).replace(',', ''))
-            items.append({"name": name, "paid": price})
-    
+        line = line.strip()
+        match = re.search(r'(.+?)\s+\$?([\d.,]+)$', line)
+        if match:
+            name = match.group(1).strip()
+            try:
+                price = float(match.group(2).replace(',', ''))
+                items.append({"name": name, "paid": price})
+            except:
+                continue
+
     refunds = []
     total_save = 0
     for item in items:
@@ -65,19 +66,19 @@ def find_refunds(file):
                     refunds.append(f"• {item['name'][:60]} — ${item['paid']:.2f} → ${amazon:.2f} (Save ${save:.2f})")
         except:
             continue
-    
+
     return f"REFUND FOUND: ${total_save:.2f}", refunds, total_save
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         file = request.files["file"]
-        message, refunds, total_save = find_refunds(file)
+        message, refunds, total_save = process_receipt(file)
         
         if total_save == 0:
             return render_template("result.html", message="No refunds found this time", refunds=[])
         
-        # 5% commission via Stripe + Venmo
+        # 5% commission with Venmo + cards
         session = stripe.checkout.Session.create(
             payment_method_types=['card', 'venmo'],
             line_items=[{
@@ -93,7 +94,7 @@ def index():
             cancel_url='https://refundqueen.me',
         )
         return redirect(session.url)
-    
+
     return render_template("index.html")
 
 @app.route("/success")
@@ -101,5 +102,4 @@ def success():
     return "<h1>Thank you! Your refund is being processed — RefundQueen got her 5%</h1><br><a href='/'>Scan Another</a>"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
