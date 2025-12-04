@@ -37,7 +37,7 @@ def ocr_image_with_api(pil_image):
     }
 
     r = requests.post(
-        "https://api.ocr.space/parse/image",
+        "http://api.ocr.space/parse/image",
         files=files,
         data=data,
         timeout=60,
