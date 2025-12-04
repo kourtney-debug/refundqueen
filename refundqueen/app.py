@@ -54,10 +54,9 @@ def ocr_image_with_api(file_storage):
         traceback.print_exc()
         return ""
 
-    # 🔍 LOG THE FULL RAW OCR RESPONSE
+    # Log full OCR result for debugging
     print("FULL OCR RESULT:", result, flush=True)
 
-    # If the API says there was an error, log and return empty
     if result.get("IsErroredOnProcessing"):
         print("OCR ERROR MESSAGE:", result.get("ErrorMessage"), flush=True)
         print("OCR ERROR DETAILS:", result.get("ErrorDetails"), flush=True)
@@ -67,6 +66,120 @@ def ocr_image_with_api(file_storage):
         return ""
 
     return result["ParsedResults"][0].get("ParsedText", "")
+
+
+def parse_amazon_receipt(text: str):
+    """
+    Specialized parser for Amazon order-summary screenshots.
+    We:
+      - Ignore everything before the 'Arriving' section
+      - Collect description lines
+      - When we hit a price-only line, we pair it with the buffered description
+    """
+    lines = text.split("\n")
+    items = []
+
+    in_items_section = False
+    current_desc_lines = []
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+
+        lower = line.lower()
+
+        # Look for start of items section
+        if "arriving" in lower:
+            in_items_section = True
+            current_desc_lines = []
+            continue
+
+        if not in_items_section:
+            # Skip header/address/payment/summary section
+            continue
+
+        # Skip non-item metadata
+        if any(
+            key in lower
+            for key in [
+                "order summary",
+                "subtotal",
+                "total before tax",
+                "grand total",
+                "shipping & handling",
+                "shipping and handling",
+                "payment method",
+                "sold by:",
+                "supplied by:",
+                "view related transactions",
+                "order #",
+            ]
+        ):
+            continue
+
+        # Price-only line
+        m_price = re.match(r"^\$?([\d.,]+)$", line)
+        if m_price:
+            if current_desc_lines:
+                name = " ".join(current_desc_lines).strip()
+                try:
+                    price = float(m_price.group(1).replace(",", ""))
+                    items.append({"name": name, "paid": price})
+                except ValueError:
+                    pass
+                # Reset for next item
+                current_desc_lines = []
+            continue
+
+        # Otherwise, treat as part of the current item description
+        current_desc_lines.append(line)
+
+    print("PARSED AMAZON ITEMS:", items, flush=True)
+    return items
+
+
+def parse_items(text: str):
+    """
+    Entry point for item parsing. For now we just support Amazon receipts well.
+    Later we can add Walmart/Target/Costco branches here.
+    """
+    if "amazon.com/gp/css/summary/print.html" in text or "order summary" in text.lower():
+        return parse_amazon_receipt(text)
+
+    # Fallback: simple generic parser (can be expanded later)
+    items = []
+    prev_line = None
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        m_both = re.search(r"(.+?)\s+\$?([\d.,]+)$", line)
+        if m_both:
+            name = m_both.group(1).strip()
+            try:
+                price = float(m_both.group(2).replace(",", ""))
+                items.append({"name": name, "paid": price})
+            except ValueError:
+                pass
+            prev_line = None
+            continue
+
+        m_price_only = re.match(r"^\$?([\d.,]+)$", line)
+        if m_price_only and prev_line:
+            try:
+                price = float(m_price_only.group(1).replace(",", ""))
+                items.append({"name": prev_line, "paid": price})
+            except ValueError:
+                pass
+            prev_line = None
+            continue
+
+        prev_line = line
+
+    print("PARSED GENERIC ITEMS:", items, flush=True)
+    return items
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -85,71 +198,12 @@ def index():
             # --- OCR via API ---
             text = ocr_image_with_api(file)
 
-            # Log OCR text for debugging
             print("OCR TEXT START >>>", flush=True)
             print(text, flush=True)
             print("<<< OCR TEXT END", flush=True)
 
-            # --- Parse items + prices (name + price on same or adjacent line) ---
-            items = []
-            prev_line = None
-
-            for raw_line in text.split("\n"):
-                line = raw_line.strip()
-                if not line:
-                    continue
-
-                # Skip obvious non-item lines
-                if any(
-                    key in line.lower()
-                    for key in [
-                        "order summary",
-                        "item(s) subtotal",
-                        "items subtotal",
-                        "subtotal",
-                        "total before tax",
-                        "grand total",
-                        "shipping",
-                        "handling",
-                        "payment method",
-                        "order placed",
-                        "tax",
-                        "ship to",
-                        "view related transactions",
-                    ]
-                ):
-                    continue
-
-                # Case 1: name and price on the same line
-                m_both = re.search(r"(.+?)\s+\$?([\d.,]+)$", line)
-                if m_both:
-                    name = m_both.group(1).strip()
-                    try:
-                        price = float(m_both.group(2).replace(",", ""))
-                    except ValueError:
-                        prev_line = line
-                        continue
-                    items.append({"name": name, "paid": price})
-                    prev_line = None
-                    continue
-
-                # Case 2: line is only a price, use previous line as name
-                m_price_only = re.match(r"^\$?([\d.,]+)$", line)
-                if m_price_only and prev_line:
-                    name = prev_line
-                    try:
-                        price = float(m_price_only.group(1).replace(",", ""))
-                    except ValueError:
-                        prev_line = line
-                        continue
-                    items.append({"name": name, "paid": price})
-                    prev_line = None
-                    continue
-
-                # Otherwise, remember this as a possible name line
-                prev_line = line
-
-            print("PARSED ITEMS:", items, flush=True)
+            # --- Parse items from OCR text ---
+            items = parse_items(text)
 
             # --- Check Amazon for cheaper prices ---
             refunds = []
@@ -215,12 +269,10 @@ def index():
                     success_url="https://refundqueen.me/success",
                     cancel_url="https://refundqueen.me",
                 )
-                # Redirect to Stripe checkout
                 return redirect(session.url, code=303)
             except Exception as e:
                 print("Stripe error:", e, flush=True)
                 traceback.print_exc()
-                # Fallback: just show refunds
                 flash("Payment failed; showing refunds only")
                 return render_template("result.html", refunds=refunds, total=total)
 
