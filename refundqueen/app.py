@@ -17,7 +17,6 @@ OCR_API_KEY = os.environ.get("OCR_API_KEY")
 def ocr_image_with_api(file_storage):
     """
     Takes the uploaded file, sends it to OCR.space, and returns extracted text.
-    We skip OpenCV/PIL preprocessing to avoid image decoding issues on server.
     """
     if not OCR_API_KEY:
         raise RuntimeError("OCR_API_KEY is not set")
@@ -67,7 +66,7 @@ def index():
             return render_template("index.html")
 
         try:
-            # --- OCR via API (no OpenCV preprocessing) ---
+            # --- OCR via API ---
             text = ocr_image_with_api(file)
 
             # --- LOG THE RAW OCR TEXT ---
@@ -77,15 +76,62 @@ def index():
 
             # --- Parse items + prices from receipt text ---
             items = []
-            for line in text.split("\n"):
-                match = re.search(r"(.+?)\s+[\$]?([\d.,]+)$", line)
-                if match:
-                    name = match.group(1).strip()
+            prev_line = None
+
+            for raw_line in text.split("\n"):
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                # Skip obvious non-item lines
+                if any(
+                    key in line.lower()
+                    for key in [
+                        "order summary",
+                        "subtotal",
+                        "total before tax",
+                        "grand total",
+                        "shipping",
+                        "handling",
+                        "payment method",
+                        "order placed",
+                        "tax",
+                    ]
+                ):
+                    continue
+
+                # Case 1: name and price on the same line
+                m_both = re.search(r"(.+?)\s+\$?([\d.,]+)$", line)
+                if m_both:
+                    name = m_both.group(1).strip()
                     try:
-                        price = float(match.group(2).replace(",", ""))
+                        price = float(m_both.group(2).replace(",", ""))
                     except ValueError:
+                        prev_line = line
                         continue
+
                     items.append({"name": name, "paid": price})
+                    prev_line = None
+                    continue
+
+                # Case 2: line is only a price, use previous line as name
+                m_price_only = re.match(r"^\$?([\d.,]+)$", line)
+                if m_price_only and prev_line:
+                    name = prev_line
+                    try:
+                        price = float(m_price_only.group(1).replace(",", ""))
+                    except ValueError:
+                        prev_line = line
+                        continue
+
+                    items.append({"name": name, "paid": price})
+                    prev_line = None
+                    continue
+
+                # Otherwise, remember this as possible name line
+                prev_line = line
+
+            print("PARSED ITEMS:", items, flush=True)
 
             # --- Check Amazon for cheaper prices ---
             refunds = []
@@ -129,7 +175,6 @@ def index():
             print("TOP-LEVEL ERROR:", e, flush=True)
             traceback.print_exc()
             flash("Error processing receipt")
-            # Fall through to re-render index
 
     return render_template("index.html")
 
@@ -137,3 +182,4 @@ def index():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+    
