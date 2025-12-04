@@ -27,6 +27,7 @@ def ocr_image_with_api(file_storage):
     if not OCR_API_KEY:
         raise RuntimeError("OCR_API_KEY is not set")
 
+    # Ensure we're at the start of the file
     file_storage.seek(0)
     file_bytes = file_storage.read()
 
@@ -74,7 +75,7 @@ def index():
             # --- OCR via API ---
             text = ocr_image_with_api(file)
 
-            # Log OCR text
+            # Log OCR text for debugging
             print("OCR TEXT START >>>", flush=True)
             print(text, flush=True)
             print("<<< OCR TEXT END", flush=True)
@@ -93,6 +94,8 @@ def index():
                     key in line.lower()
                     for key in [
                         "order summary",
+                        "item(s) subtotal",
+                        "items subtotal",
                         "subtotal",
                         "total before tax",
                         "grand total",
@@ -101,11 +104,13 @@ def index():
                         "payment method",
                         "order placed",
                         "tax",
+                        "ship to",
+                        "view related transactions",
                     ]
                 ):
                     continue
 
-                # Case 1: name and price on same line
+                # Case 1: name and price on the same line
                 m_both = re.search(r"(.+?)\s+\$?([\d.,]+)$", line)
                 if m_both:
                     name = m_both.group(1).strip()
@@ -131,6 +136,7 @@ def index():
                     prev_line = None
                     continue
 
+                # Otherwise, remember this as a possible name line
                 prev_line = line
 
             print("PARSED ITEMS:", items, flush=True)
