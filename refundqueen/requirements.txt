@@ -2,7 +2,7 @@ flask
 opencv-python-headless
 pillow
 pytesseract
+tesseract-ocr
 requests
 beautifulsoup4
 gunicorn
-stripe
